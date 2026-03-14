@@ -1,41 +1,35 @@
---// Configuration (Will be hidden by obfuscator)
-local _P = "dannilefubuki"
-local _G1 = "5zXcC7cK" -- Iron Man
-local _G2 = "mCfftt2x" -- Strongest Battlegrounds
-local _ID = game.PlaceId
+local HttpService = game:GetService("HttpService")
+local password = "dannilefubuki"
 
---// Localizing functions to prevent hook-jumping
-local _REQ = (syn and syn.request) or (http and http.request) or http_request or (Fluxus and Fluxus.request) or request
-local _L = loadstring
+local function loadProtectedPaste(pasteId)
+    local url = "https://pastebin.com" .. pasteId
+    local success, response = pcall(function()
+        -- Sends the password to Pastebin to get the actual code
+        return HttpService:PostAsync(url, 
+            "PostPasswordVerificationForm[password]=" .. password, 
+            Enum.HttpContentType.ApplicationUrlEncoded
+        )
+    end)
 
-if not _REQ then 
-    warn("Executor not supported: Missing Request Function") 
-    return 
-end
-
-local function _EXEC(_ID_STR)
-    local _RES = _REQ({
-        Url = "https://pastebin.com" .. _ID_STR,
-        Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/x-www-form-urlencoded"
-        },
-        Body = "PostPasswordVerificationForm[password]=" .. _P
-    })
-
-    if _RES and _RES.Body then
-        local _S, _E = pcall(function()
-            _L(_RES.Body)()
-        end)
-        if not _S then warn("Exec Error: " .. tostring(_E)) end
+    if success then
+        local func, err = loadstring(response)
+        if func then
+            func()
+        else
+            warn("Syntax error in loaded script: " .. tostring(err))
+        end
+    else
+        warn("Failed to reach Pastebin: " .. tostring(response))
     end
 end
 
---// Logic flow
-if _ID == 16929212566 then
-    _EXEC(_G1)
-elseif _ID == 10449761463 then
-    _EXEC(_G2)
+-- Detection for which game you are in
+if game.PlaceId == 16929212566 then
+    print("Loading Iron Man: Reimagined script...")
+    loadProtectedPaste("5zXcC7cK")
+elseif game.PlaceId == 10449761463 then
+    print("Loading The Strongest Battlegrounds script...")
+    loadProtectedPaste("mCfftt2x")
 else
-    print("Game not supported.")
+    warn("This script is not configured for this PlaceId: " .. game.PlaceId)
 end
