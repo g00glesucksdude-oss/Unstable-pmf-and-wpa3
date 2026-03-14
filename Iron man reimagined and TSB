@@ -1,25 +1,36 @@
-local password = "dannilefubuki"
-local request = (syn and syn.request) or (http and http.request) or http_request or request
+--// Configuration
+local _P = game.PlaceId
+local _I = "A8V7zx89" -- Iron Man
+local _T = "SH80r9gk" -- TSB
 
-local function loadProtectedPaste(pasteId)
-    local url = "https://pastebin.com" .. pasteId
-    
-    local response = request({
-        Url = url,
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
-        Body = "PostPasswordVerificationForm[password]=" .. password
-    })
+--// Localizing functions (helps with obfuscation & speed)
+local _G = game
+local _H = _G.HttpGet
+local _L = loadstring
+local _W = warn
 
-    if response.Success then
-        loadstring(response.Body)()
+local function _E(_ID)
+    -- Using the raw link for direct access
+    local _U = "https://pastebin.com" .. _ID
+    local _S, _C = pcall(function()
+        return _H(_G, _U)
+    end)
+
+    if _S and _C then
+        local _F, _ERR = _L(_C)
+        if _F then
+            _F()
+        else
+            _W("Load Error: " .. tostring(_ERR))
+        end
     else
-        warn("Failed to reach Pastebin")
+        _W("Fetch Error")
     end
 end
 
-if game.PlaceId == 16929212566 then
-    loadProtectedPaste("5zXcC7cK")
-elseif game.PlaceId == 10449761463 then
-    loadProtectedPaste("mCfftt2x")
+--// Logic
+if _P == 16929212566 then
+    _E(_I)
+elseif _P == 10449761463 then
+    _E(_T)
 end
