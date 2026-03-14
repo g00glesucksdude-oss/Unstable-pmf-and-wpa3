@@ -1,0 +1,41 @@
+--// SAFE CONFIG (Encapsulated to prevent variable leaking)
+local _G_ID = game.PlaceId
+local _LOAD = loadstring
+
+--// PROTECTED STORAGE (Using Long-Strings to avoid escape character errors)
+local _SCRIPTS = {
+    [16929212566] = [==[
+        -- PASTE YOUR IRON MAN CODE HERE
+        print("Iron Man Script Active")
+    ]==],
+    
+    [10449761463] = [==[
+        -- PASTE YOUR TSB CODE HERE
+        print("TSB Script Active")
+    ]==]
+}
+
+--// EXECUTION ENGINE (Wrapped in pcall to catch Obfuscator VM errors)
+local function _START()
+    local _DATA = _SCRIPTS[_G_ID]
+    
+    if _DATA then
+        local _SUCCESS, _RESULT = pcall(function()
+            local _FUNC, _ERR = _LOAD(_DATA)
+            if _FUNC then
+                return _FUNC()
+            else
+                error("Syntax: " .. tostring(_ERR))
+            end
+        end)
+
+        if not _SUCCESS then
+            warn("OBFUSCATION_VM_ERROR: " .. tostring(_RESULT))
+        end
+    else
+        print("Game not supported.")
+    end
+end
+
+--// RUN
+_START()
