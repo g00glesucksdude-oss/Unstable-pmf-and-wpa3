@@ -1,36 +1,41 @@
---// Obfuscation-Friendly Config
-local _P = game.PlaceId
-local _I = "A8V7zx89" -- Iron Man
-local _T = "SH80r9gk" -- TSB
+--// SAFE CONFIG (Encapsulated to prevent variable leaking)
+local _G_ID = game.PlaceId
+local _LOAD = loadstring
 
---// Localizing functions to hide from human eyes
-local _G = game
-local _L = loadstring
-local _W = warn
+--// PROTECTED STORAGE (Using Long-Strings to avoid escape character errors)
+local _SCRIPTS = {
+    [16929212566] = [==[
+        -- PASTE YOUR IRON MAN CODE HERE
+        print("Iron Man Script Active")
+    ]==],
+    
+    [10449761463] = [==[
+        -- PASTE YOUR TSB CODE HERE
+        print("TSB Script Active")
+    ]==]
+}
 
-local function _LOAD(_ID)
-    -- Using pcall to prevent the whole script from crashing on a fetch error
-    local _S, _RES = pcall(function()
-        return _G:HttpGet("https://pastebin.com" .. _ID)
-    end)
+--// EXECUTION ENGINE (Wrapped in pcall to catch Obfuscator VM errors)
+local function _START()
+    local _DATA = _SCRIPTS[_G_ID]
+    
+    if _DATA then
+        local _SUCCESS, _RESULT = pcall(function()
+            local _FUNC, _ERR = _LOAD(_DATA)
+            if _FUNC then
+                return _FUNC()
+            else
+                error("Syntax: " .. tostring(_ERR))
+            end
+        end)
 
-    if _S and _RES then
-        local _F, _E = _L(_RES)
-        if _F then
-            _F()
-        else
-            _W("Script execution failed: " .. tostring(_E))
+        if not _SUCCESS then
+            warn("OBFUSCATION_VM_ERROR: " .. tostring(_RESULT))
         end
     else
-        _W("Fetch Error: Connection to Pastebin failed.")
+        print("Game not supported.")
     end
 end
 
---// Execution Logic
-if _P == 16929212566 then
-    _LOAD(_I)
-elseif _P == 10449761463 then
-    _LOAD(_T)
-else
-    _W("Game not supported. PlaceId: " .. _P)
-end
+--// RUN
+_START()
