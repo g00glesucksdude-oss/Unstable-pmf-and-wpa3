@@ -1,35 +1,25 @@
-local HttpService = game:GetService("HttpService")
 local password = "dannilefubuki"
+local request = (syn and syn.request) or (http and http.request) or http_request or request
 
 local function loadProtectedPaste(pasteId)
     local url = "https://pastebin.com" .. pasteId
-    local success, response = pcall(function()
-        -- Sends the password to Pastebin to get the actual code
-        return HttpService:PostAsync(url, 
-            "PostPasswordVerificationForm[password]=" .. password, 
-            Enum.HttpContentType.ApplicationUrlEncoded
-        )
-    end)
+    
+    local response = request({
+        Url = url,
+        Method = "POST",
+        Headers = {["Content-Type"] = "application/x-www-form-urlencoded"},
+        Body = "PostPasswordVerificationForm[password]=" .. password
+    })
 
-    if success then
-        local func, err = loadstring(response)
-        if func then
-            func()
-        else
-            warn("Syntax error in loaded script: " .. tostring(err))
-        end
+    if response.Success then
+        loadstring(response.Body)()
     else
-        warn("Failed to reach Pastebin: " .. tostring(response))
+        warn("Failed to reach Pastebin")
     end
 end
 
--- Detection for which game you are in
 if game.PlaceId == 16929212566 then
-    print("Loading Iron Man: Reimagined script...")
     loadProtectedPaste("5zXcC7cK")
 elseif game.PlaceId == 10449761463 then
-    print("Loading The Strongest Battlegrounds script...")
     loadProtectedPaste("mCfftt2x")
-else
-    warn("This script is not configured for this PlaceId: " .. game.PlaceId)
 end
