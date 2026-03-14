@@ -1,36 +1,36 @@
---// Configuration
+--// Obfuscation-Friendly Config
 local _P = game.PlaceId
 local _I = "A8V7zx89" -- Iron Man
 local _T = "SH80r9gk" -- TSB
 
---// Localizing functions (helps with obfuscation & speed)
+--// Localizing functions to hide from human eyes
 local _G = game
-local _H = _G.HttpGet
 local _L = loadstring
 local _W = warn
 
-local function _E(_ID)
-    -- Using the raw link for direct access
-    local _U = "https://pastebin.com" .. _ID
-    local _S, _C = pcall(function()
-        return _H(_G, _U)
+local function _LOAD(_ID)
+    -- Using pcall to prevent the whole script from crashing on a fetch error
+    local _S, _RES = pcall(function()
+        return _G:HttpGet("https://pastebin.com" .. _ID)
     end)
 
-    if _S and _C then
-        local _F, _ERR = _L(_C)
+    if _S and _RES then
+        local _F, _E = _L(_RES)
         if _F then
             _F()
         else
-            _W("Load Error: " .. tostring(_ERR))
+            _W("Script execution failed: " .. tostring(_E))
         end
     else
-        _W("Fetch Error")
+        _W("Fetch Error: Connection to Pastebin failed.")
     end
 end
 
---// Logic
+--// Execution Logic
 if _P == 16929212566 then
-    _E(_I)
+    _LOAD(_I)
 elseif _P == 10449761463 then
-    _E(_T)
+    _LOAD(_T)
+else
+    _W("Game not supported. PlaceId: " .. _P)
 end
